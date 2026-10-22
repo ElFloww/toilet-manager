@@ -3,14 +3,24 @@ import { mkdirSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createApp } from './app.js';
 import { Store } from './store.js';
+import { broadcast } from './push.js';
 
 const dataDir = resolve(process.env.DATA_DIR ?? 'data');
 mkdirSync(dataDir, { recursive: true });
 const store = new Store(resolve(dataDir, 'toilets.sqlite'));
-const app = createApp(store);
+const vapidSubject = process.env.VAPID_SUBJECT ?? 'mailto:toilet-manager@example.com';
+const vapidKeys = store.vapidKeys();
+const app = createApp(store, message => {
+  broadcast(store, vapidKeys, vapidSubject, message)
+    .catch(error => console.error('Notifications impossibles :', error instanceof Error ? error.message : error));
+});
 const dist = resolve('dist');
 if (existsSync(dist)) {
-  app.use(express.static(dist));
+  app.use(express.static(dist, {
+    setHeaders: (res, path) => {
+      if (/[\\/](sw\.js|manifest\.webmanifest)$/.test(path)) res.setHeader('Cache-Control', 'no-cache');
+    },
+  }));
   app.get('/{*path}', (_req, res) => res.sendFile(resolve(dist, 'index.html')));
 }
 const timer = setInterval(() => {

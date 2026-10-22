@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { Check, CircleHelp, Info, Minus, Plus, RefreshCw, ShieldCheck, SprayCan, Volume2, VolumeX, Wind, X } from 'lucide-react';
+import { Bell, BellOff, BellRing, Check, CircleHelp, Download, Info, Minus, Plus, RefreshCw, ShieldCheck, SprayCan, Volume2, VolumeX, Wind, X } from 'lucide-react';
 import { activeDangerLevel, CLEANLINESS, DANGER_LEVELS, statusColor, type Cleanliness, type Snapshot, type Toilet } from '../shared/domain';
 import FloorPlan from './FloorPlan';
+import { currentPushState, disablePush, enablePush, isIos, isStandalone, type InstallPromptEvent, type PushState } from './push';
 import { CLEANLINESS_EMOJI, DANGER_EMOJI, playFeedback, reportFeedback, verdict, weatherIcon, type ReportFeedback, type SoundName } from './feedback';
 
 const clock = new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' });
@@ -43,6 +44,10 @@ export default function App() {
   const [soundError, setSoundError] = useState('');
   const [flushing, setFlushing] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [pushState, setPushState] = useState<PushState>('off');
+  const [pushInfo, setPushInfo] = useState('');
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
+  const [installed, setInstalled] = useState(() => isStandalone());
   const audio = useRef<AudioContext | null>(null);
   const soundOn = useRef(true);
   const offset = useRef(0);
@@ -50,6 +55,54 @@ export default function App() {
   const resetRequested = useRef(0);
   const panel = useRef<HTMLElement>(null);
   const helpDialog = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    void currentPushState().then(setPushState).catch(() => setPushState('unsupported'));
+    const openFromUrl = (href: string) => {
+      const id = new URL(href, location.href).searchParams.get('wc');
+      if (id) setSelected(id);
+    };
+    openFromUrl(location.href);
+    if (location.search) history.replaceState(null, '', location.pathname);
+    const onMessage = (event: MessageEvent) => { if (event.data?.type === 'open') openFromUrl(event.data.url); };
+    const onInstallPrompt = (event: Event) => { event.preventDefault(); setInstallPrompt(event as InstallPromptEvent); };
+    const onInstalled = () => { setInstalled(true); setInstallPrompt(null); };
+    navigator.serviceWorker?.addEventListener('message', onMessage);
+    window.addEventListener('beforeinstallprompt', onInstallPrompt);
+    window.addEventListener('appinstalled', onInstalled);
+    return () => {
+      navigator.serviceWorker?.removeEventListener('message', onMessage);
+      window.removeEventListener('beforeinstallprompt', onInstallPrompt);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
+  }, []);
+
+  async function togglePush() {
+    setPushInfo('');
+    if (pushState === 'needs-install') { setPushInfo('ios'); return; }
+    if (pushState === 'unsupported') { setPushInfo('Ce navigateur ne sait pas recevoir de notifications. Essayez Chrome, Edge, Firefox ou Safari récent.'); return; }
+    if (pushState === 'denied') { setPushInfo('Les notifications sont bloquées pour ce site : autorisez-les dans les réglages du navigateur, puis réessayez.'); return; }
+    const previous = pushState;
+    setPushState('busy');
+    try {
+      const next = previous === 'on' ? await disablePush() : await enablePush();
+      setPushState(next);
+      if (next === 'on') setPushInfo('Alertes activées : vous serez prévenu à chaque changement d’état d’une cabine.');
+      else if (next === 'denied') setPushInfo('Notifications refusées. Vous pourrez les autoriser plus tard dans les réglages du navigateur.');
+    } catch (cause) {
+      console.error('Abonnement aux alertes impossible :', cause);
+      setPushState(previous);
+      setPushInfo(cause instanceof Error ? `Activation impossible : ${cause.message}` : 'Activation des alertes impossible.');
+    }
+  }
+
+  async function install() {
+    if (installPrompt) {
+      await installPrompt.prompt();
+      const { outcome } = await installPrompt.userChoice;
+      if (outcome === 'accepted') setInstallPrompt(null);
+    } else setPushInfo('ios');
+  }
 
   useEffect(() => {
     if (!feedback) return;
@@ -223,12 +276,22 @@ export default function App() {
         <button className="tool-button sound-button" onClick={toggleSound} aria-pressed={soundEnabled} title={soundEnabled ? 'Couper les bruitages' : 'Activer les bruitages'}>
           {soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}<span>{soundEnabled ? 'Bruitages' : 'Silence'}</span>
         </button>
+        {!installed && (installPrompt || isIos()) && <button className="tool-button" onClick={() => void install()} title="Installer l’application sur cet appareil"><Download size={18} /><span>Installer</span></button>}
+        <button className={`tool-button push-button push-${pushState}`} onClick={() => void togglePush()} disabled={pushState === 'busy'} aria-pressed={pushState === 'on'}
+          title={pushState === 'on' ? 'Désactiver les alertes sur cet appareil' : 'Recevoir une notification à chaque changement'}>
+          {pushState === 'on' ? <BellRing size={18} /> : pushState === 'denied' || pushState === 'unsupported' ? <BellOff size={18} /> : <Bell size={18} />}
+          <span>{pushState === 'on' ? 'Alertes activées' : 'Alertes'}</span>
+        </button>
         <button className="tool-button" onClick={() => setHelp(true)} aria-label="Comment ça marche"><CircleHelp size={18} /><span>Aide</span></button>
       </div>
     </header>
 
     <main>
       {error && <div className="notification error" role="alert"><Info size={18} /><span>{error} Les données peuvent être obsolètes.</span><button onClick={() => void refresh()}>Réessayer</button></div>}
+      {pushInfo === 'ios' ? <div className="notification install-steps" role="status"><Download size={18} />
+        <span><b>Sur iPhone, les alertes passent par l’app installée.</b> Dans Safari, touchez <b>Partager</b> puis <b>Sur l’écran d’accueil</b>. Ouvrez ensuite « Toilettes » depuis l’écran d’accueil et touchez <b>Alertes</b>.</span>
+        <button onClick={() => setPushInfo('')}>Fermer</button></div>
+        : pushInfo && <div className="notification" role="status"><Bell size={18} /><span>{pushInfo}</span><button onClick={() => setPushInfo('')}>Fermer</button></div>}
       {soundError && <div className="notification" role="status"><VolumeX size={18} /><span>{soundError}</span><button onClick={() => setSoundError('')}>Fermer</button></div>}
 
       <div className="studio">
@@ -389,6 +452,7 @@ export default function App() {
           <li>Signalez la propreté, indépendamment. Le dernier signalement remplace le précédent ; «{' '}Propre{' '}» indique un nettoyage.</li>
         </ol>
         <p>Chaque état a son bruitage : chasse d’eau, prouts plus ou moins inquiétants, mouches, compteur Geiger, ventouse… Le bouton «{' '}Bruitages{' '}» les coupe.</p>
+        <p>Le bouton «{'\u00a0'}Alertes{'\u00a0'}» envoie une notification sur cet appareil à chaque signalement, bon ou mauvais. Installez l’app pour la retrouver sur l’écran d’accueil (obligatoire sur iPhone pour recevoir les alertes).</p>
         <p>À minuit, heure de Paris, tout est remis à propre, même après un redémarrage du serveur.</p>
         <p className="help-privacy">Aucun compte, cookie, outil de suivi ni historique nominatif : seul l’état actuel de chaque WC est conservé. L’hébergeur peut toutefois avoir ses propres journaux réseau.</p>
         <button className="submit-report" onClick={() => setHelp(false)}>C’est compris</button>

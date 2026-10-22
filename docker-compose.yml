@@ -16,6 +16,9 @@ services:
     container_name: toilet-manager
     restart: unless-stopped
     init: true
+    environment:
+      # Contact transmis aux services de push (adresse mail réelle recommandée).
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:toilet-manager@example.com}
     volumes:
       - toilet-data:/app/data
     networks:

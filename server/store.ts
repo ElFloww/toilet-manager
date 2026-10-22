@@ -1,6 +1,9 @@
 import { DatabaseSync } from 'node:sqlite';
 import { CLEANLINESS, DANGER_LEVELS, TOILETS, type Snapshot } from '../shared/domain.js';
 import { nextParisMidnight, parisDay } from './time.js';
+import { generateVapidKeys, type PushSubscriptionData, type VapidKeys } from './push.js';
+
+export const MAX_SUBSCRIPTIONS = 2000;
 
 export class Store {
   private db: DatabaseSync;
@@ -14,6 +17,9 @@ export class Store {
         danger_until INTEGER, cleanliness TEXT NOT NULL DEFAULT 'clean'
       );
       CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS push_subscriptions (
+        endpoint TEXT PRIMARY KEY, p256dh TEXT NOT NULL, auth TEXT NOT NULL
+      );
     `);
     const insert = this.db.prepare('INSERT OR IGNORE INTO toilets (id) VALUES (?)');
     for (const toilet of TOILETS) insert.run(toilet.id);
@@ -72,6 +78,36 @@ export class Store {
       this.db.prepare('UPDATE toilets SET cleanliness = ? WHERE id = ?').run(report.level, id);
     }
     return this.snapshot();
+  }
+
+  /** Clés VAPID du serveur, créées au premier démarrage et conservées dans la base. */
+  vapidKeys(): VapidKeys {
+    const row = this.db.prepare("SELECT value FROM metadata WHERE key = 'vapid'").get() as { value: string } | undefined;
+    if (row) return JSON.parse(row.value) as VapidKeys;
+    const keys = generateVapidKeys();
+    this.db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES ('vapid', ?)").run(JSON.stringify(keys));
+    return this.vapidKeys();
+  }
+
+  /** Enregistre un abonnement ; renvoie false si la limite est atteinte. Aucun lien avec les signalements. */
+  addSubscription(subscription: PushSubscriptionData): boolean {
+    const exists = this.db.prepare('SELECT 1 FROM push_subscriptions WHERE endpoint = ?').get(subscription.endpoint);
+    if (!exists) {
+      const { count } = this.db.prepare('SELECT COUNT(*) AS count FROM push_subscriptions').get() as { count: number };
+      if (count >= MAX_SUBSCRIPTIONS) return false;
+    }
+    this.db.prepare('INSERT OR REPLACE INTO push_subscriptions (endpoint, p256dh, auth) VALUES (?, ?, ?)')
+      .run(subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth);
+    return true;
+  }
+
+  removeSubscription(endpoint: string) {
+    this.db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
+  }
+
+  subscriptions(): PushSubscriptionData[] {
+    return (this.db.prepare('SELECT endpoint, p256dh, auth FROM push_subscriptions').all() as { endpoint: string; p256dh: string; auth: string }[])
+      .map(row => ({ endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth } }));
   }
 
   close() { this.db.close(); }

@@ -21,6 +21,7 @@ Un site React + TypeScript et une API Node.js / SQLite pour consulter et signale
 - [x] Ajouter un favicon SVG assorti au site.
 - [x] Refaire la direction artistique en bulletin météo TV (carte météo, prévisions par cabine, bandeau d'alertes, flash spécial).
 - [x] Remplacer les bips par des bruitages : chasse d'eau, prouts, mouches, compteur Geiger, ventouse, toc toc.
+- [x] PWA installable (manifeste, icônes, service worker) et notifications Web Push à chaque signalement, bon ou mauvais.
 
 ## Livraison et validation
 - [x] Installer les dépendances et vérifier le typage / build de production.

@@ -60,6 +60,7 @@ Les couleurs donnent priorité à la propreté critique puis dangereuse, puis à
 
 - `GET /api/state` : `{ serverTime, resetsAt, toilets }` (horodatages en millisecondes Unix).
 - `POST /api/toilets/:id/reports` : corps JSON `{ "kind": "danger", "level": 1 }` à `4`, ou `{ "kind": "cleanliness", "level": "clean" | "degraded" | "dangerous" | "critical" }`. Renvoie l'état complet.
+- `GET /api/push/key` : clé publique VAPID. `POST /api/push/subscriptions` : enregistre un abonnement push du navigateur (`201`, `400` si invalide, `503` si la limite de 2000 appareils est atteinte). `POST /api/push/unsubscribe` : `{ "endpoint" }`, renvoie `204`.
 - Réponses d'erreur JSON et statuts `400`, `404`, `413` ou `500`.
 
 ## Interface, animations et bruitages
@@ -82,6 +83,17 @@ Chaque signalement enregistré déclenche une animation sur le WC, un « Flash s
 Sélectionner une cabine fait « toc toc » à la porte, et la cuvette affichée quand rien n'est sélectionné tire la chasse quand on clique dessus. Les sons durent de 0,3 à 3 secondes, varient légèrement à chaque lecture et sont synthétisés localement avec Web Audio (`src/feedback.ts`) : aucun fichier audio ni service externe. Le bouton « Bruitages » de l'en-tête les coupe ou les réactive pour l'onglet courant, sans cookie ni stockage. Un navigateur peut refuser l'audio ; un message l'indique sans empêcher l'enregistrement.
 
 Les effets ne sont joués que pour la personne qui agit, jamais lors des actualisations automatiques ou après une erreur API. Les animations respectent la préférence système de réduction des mouvements.
+
+## Application installable et notifications
+
+Le site est une PWA : manifeste, icônes, service worker (coquille de l’appli en cache, jamais l’API). Bouton **Installer** dans l’en-tête (Android/Chrome/Edge/desktop) ; sur iPhone : Partager → *Sur l’écran d’accueil*.
+
+Le bouton **Alertes** abonne l’appareil : chaque signalement, bon ou mauvais, déclenche une notification « 💨 N1 : Nuage suspect » sur tous les appareils abonnés (toucher la notification ouvre le plan sur la cabine). Le serveur implémente Web Push (RFC 8291 + VAPID) sans dépendance ; les clés VAPID sont créées au premier démarrage et conservées dans la base (volume `toilet-data` : ne pas le supprimer, sinon tout le monde doit se réabonner). Variable optionnelle `VAPID_SUBJECT` (`mailto:vous@exemple.fr`).
+
+- **HTTPS obligatoire** (service worker et push) : certificat Let’s Encrypt dans NPM ; `localhost` fonctionne pour tester.
+- **iOS 16.4+** : les notifications ne marchent qu’une fois l’appli ajoutée à l’écran d’accueil.
+- Les abonnements ne sont liés à aucun signalement ni identité ; ceux qui expirent sont supprimés automatiquement. Les serveurs de push (Google, Mozilla, Apple, Microsoft) voient les adresses d’abonnement, pas le contenu.
+- Dans NPM, ne pas mettre en cache `/sw.js`.
 
 ## Anonymat et hébergement
 

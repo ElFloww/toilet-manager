@@ -1,8 +1,25 @@
 import express, { type ErrorRequestHandler } from 'express';
-import { CLEANLINESS, DANGER_LEVELS, TOILETS } from '../shared/domain.js';
+import { CLEANLINESS, DANGER_LEVELS, TOILETS, type Cleanliness } from '../shared/domain.js';
 import type { Store } from './store.js';
+import { parseSubscription, type PushMessage } from './push.js';
+import { reportFeedback } from '../src/feedback.js';
 
-export function createApp(store: Store) {
+/** Message de notification pour un signalement enregistré. */
+export function reportMessage(id: string, report: { kind: 'danger'; level: number } | { kind: 'cleanliness'; level: string }): PushMessage {
+  const toilet = TOILETS.find(toilet => toilet.id === id)!;
+  const effect = reportFeedback(report.kind, report.level as number | Cleanliness);
+  const level = report.kind === 'danger'
+    ? DANGER_LEVELS.find(level => level.id === report.level)!.name
+    : CLEANLINESS.find(level => level.id === report.level)!.name;
+  return {
+    title: `${effect.emoji} ${toilet.label} : ${level}`,
+    body: `${effect.shout} ${effect.message} (${toilet.name}, ${toilet.room.toLowerCase()})`,
+    tag: `wc-${toilet.label}`,
+    url: `/?wc=${encodeURIComponent(toilet.id)}`,
+  };
+}
+
+export function createApp(store: Store, notify: (message: PushMessage) => void = () => {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
@@ -32,15 +49,41 @@ export function createApp(store: Store) {
     }
     if ('kind' in body && 'level' in body) {
       if (body.kind === 'danger' && DANGER_LEVELS.some(level => level.id === body.level)) {
-        res.json(store.report(req.params.id, { kind: 'danger', level: Number(body.level) }));
+        const report = { kind: 'danger', level: Number(body.level) } as const;
+        res.json(store.report(req.params.id, report));
+        notify(reportMessage(req.params.id, report));
         return;
       }
       if (body.kind === 'cleanliness' && CLEANLINESS.some(level => level.id === body.level)) {
-        res.json(store.report(req.params.id, { kind: 'cleanliness', level: String(body.level) }));
+        const report = { kind: 'cleanliness', level: String(body.level) } as const;
+        res.json(store.report(req.params.id, report));
+        notify(reportMessage(req.params.id, report));
         return;
       }
     }
     res.status(400).json({ error: 'Type ou niveau de signalement invalide.' });
+  });
+  app.get('/api/push/key', (_req, res) => res.json({ publicKey: store.vapidKeys().publicKey }));
+  app.post('/api/push/subscriptions', (req, res) => {
+    const subscription = parseSubscription(req.body);
+    if (!subscription) {
+      res.status(400).json({ error: 'Abonnement aux notifications invalide ou service de push non pris en charge.' });
+      return;
+    }
+    if (!store.addSubscription(subscription)) {
+      res.status(503).json({ error: 'Trop d’appareils abonnés pour le moment.' });
+      return;
+    }
+    res.status(201).json({ subscribed: true });
+  });
+  app.post('/api/push/unsubscribe', (req, res) => {
+    const endpoint: unknown = req.body?.endpoint;
+    if (typeof endpoint !== 'string' || endpoint.length > 1024) {
+      res.status(400).json({ error: 'Adresse d’abonnement invalide.' });
+      return;
+    }
+    store.removeSubscription(endpoint);
+    res.status(204).end();
   });
   app.use('/api', (_req, res) => { res.status(404).json({ error: 'Route API introuvable.' }); });
   const handleError: ErrorRequestHandler = (error, _req, res, _next) => {

@@ -362,3 +362,21 @@ footer button { margin-left: auto; border: 0; background: none; padding: 0; colo
   .ticker-track { animation: none !important; }
   .ticker-window { overflow-x: auto; }
 }
+
+/* ---------- Alertes push et installation ---------- */
+.push-button.push-on { background: var(--yellow); border-color: var(--yellow); color: #2a2200; }
+.push-button.push-on svg { animation: ring 2.4s ease-in-out infinite; transform-origin: 50% 10%; }
+.push-button.push-denied, .push-button.push-unsupported { color: var(--text-3); }
+@keyframes ring { 0%, 80%, 100% { transform: rotate(0); } 84% { transform: rotate(14deg); } 88% { transform: rotate(-12deg); } 92% { transform: rotate(8deg); } 96% { transform: rotate(-4deg); } }
+.install-steps { align-items: flex-start; line-height: 1.5; }
+.install-steps > svg { flex-shrink: 0; margin-top: 2px; }
+
+/* Application installée : on respecte l'encoche et la barre d'accueil. */
+.topbar { padding-top: max(18px, env(safe-area-inset-top)); padding-left: max(28px, env(safe-area-inset-left)); padding-right: max(28px, env(safe-area-inset-right)); }
+.ticker { height: calc(42px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); }
+body { padding-bottom: calc(46px + env(safe-area-inset-bottom)); }
+@media (max-width: 620px) {
+  .topbar { padding-top: max(12px, env(safe-area-inset-top)); padding-left: 12px; padding-right: 12px; }
+  .header-right { gap: 6px; }
+  .ticker { height: calc(38px + env(safe-area-inset-bottom)); }
+}
