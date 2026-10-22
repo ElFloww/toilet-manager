@@ -1,0 +1,46 @@
+# Toilet Manager derrière Nginx Proxy Manager (NPM).
+# NPM tourne dans une autre stack : on rejoint simplement son réseau Docker.
+# Aucun port n'est publié sur l'hôte, seul NPM atteint le conteneur.
+#
+# 1. Trouver le réseau de NPM : docker network ls  (souvent « npm_default »)
+# 2. Si besoin, le préciser dans un fichier .env : NPM_NETWORK=nom_du_reseau
+# 3. docker compose up -d --build
+# 4. Dans NPM, Proxy Host : scheme http, hostname « toilet-manager », port 3001
+
+name: toilet-manager
+
+services:
+  toilet-manager:
+    build: .
+    image: toilet-manager:latest
+    container_name: toilet-manager
+    restart: unless-stopped
+    init: true
+    volumes:
+      - toilet-data:/app/data
+    networks:
+      - npm
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: local
+      options:
+        max-size: "5m"
+        max-file: "2"
+    # Pour tester sans NPM, décommenter (accessible seulement depuis l'hôte) :
+    # ports:
+    #   - "127.0.0.1:3001:3001"
+
+volumes:
+  # Base SQLite : à conserver (et sauvegarder) entre les mises à jour.
+  toilet-data:
+
+networks:
+  npm:
+    external: true
+    name: ${NPM_NETWORK:-npm_default}
