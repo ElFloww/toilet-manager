@@ -1,11 +1,12 @@
-# Toilet Manager derrière Nginx Proxy Manager (NPM).
-# NPM tourne dans une autre stack : on rejoint simplement son réseau Docker.
-# Aucun port n'est publié sur l'hôte, seul NPM atteint le conteneur.
+# Toilet Manager, publié sur le port 3001 de l'hôte Docker.
+# Nginx Proxy Manager (NPM) tourne dans un autre LXC : il joint ce conteneur
+# via l'adresse IP du LXC Docker (réseau local), pas via un réseau Docker partagé.
 #
-# 1. Trouver le réseau de NPM : docker network ls  (souvent « npm_default »)
-# 2. Si besoin, le préciser dans un fichier .env : NPM_NETWORK=nom_du_reseau
-# 3. docker compose up -d --build
-# 4. Dans NPM, Proxy Host : scheme http, hostname « toilet-manager », port 3001
+# 1. docker compose up -d --build
+# 2. Dans NPM, Proxy Host : scheme http, forward hostname/IP = IP du LXC Docker, port 3001
+#    (HTTPS/Let's Encrypt et « Websockets » non requis, mais HTTPS obligatoire pour la PWA et les notifications).
+# Pour restreindre l'accès à NPM seul, mettre l'IP du LXC Docker dans APP_BIND (ex. 192.168.1.20)
+# et filtrer par pare-feu / règle LXC l'IP du LXC NPM.
 
 name: toilet-manager
 
@@ -21,8 +22,8 @@ services:
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:toilet-manager@example.com}
     volumes:
       - toilet-data:/app/data
-    networks:
-      - npm
+    ports:
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-3001}:3001"
     read_only: true
     tmpfs:
       - /tmp
@@ -35,15 +36,7 @@ services:
       options:
         max-size: "5m"
         max-file: "2"
-    # Pour tester sans NPM, décommenter (accessible seulement depuis l'hôte) :
-    # ports:
-    #   - "127.0.0.1:3001:3001"
 
 volumes:
   # Base SQLite : à conserver (et sauvegarder) entre les mises à jour.
   toilet-data:
-
-networks:
-  npm:
-    external: true
-    name: ${NPM_NETWORK:-npm_default}

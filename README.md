@@ -29,11 +29,11 @@ npm run build
 
 ### Docker derrière Nginx Proxy Manager
 
-Le dépôt contient un `Dockerfile` (construction en deux étapes, image finale Node 22 Alpine, utilisateur non root) et un `docker-compose.yml` prévu pour être placé derrière un Nginx Proxy Manager (NPM) qui tourne dans une autre stack. Le conteneur ne publie aucun port : il rejoint le réseau Docker de NPM.
+Le dépôt contient un `Dockerfile` (construction en deux étapes, image finale Node 22 Alpine, utilisateur non root) et un `docker-compose.yml`. NPM tourne dans un autre LXC : le conteneur publie donc le port `3001` de l’hôte Docker et NPM l’atteint par l’adresse IP du LXC.
 
-1. Repérer le réseau de NPM : `docker network ls` (souvent `npm_default`). S’il porte un autre nom, créer un fichier `.env` à côté du compose avec `NPM_NETWORK=nom_du_reseau`.
-2. Lancer : `docker compose up -d --build`.
-3. Dans NPM, créer un *Proxy Host* : domaine voulu, scheme `http`, forward hostname `toilet-manager`, port `3001`, « Block Common Exploits » coché, certificat Let’s Encrypt et « Force SSL ».
+1. Lancer : `docker compose up -d --build`.
+2. Dans NPM, créer un *Proxy Host* : domaine voulu, scheme `http`, forward hostname/IP = **IP du LXC Docker**, port `3001`, « Block Common Exploits » coché, certificat Let’s Encrypt et « Force SSL ».
+3. Optionnel (fichier `.env` à côté du compose) : `APP_PORT` pour changer le port publié, `APP_BIND` pour l’écouter sur une seule IP (celle du LXC Docker plutôt que `0.0.0.0`). Le port n’a pas d’authentification : n’autoriser que le LXC de NPM (pare-feu Proxmox/LXC) et ne pas l’exposer sur Internet.
 
 La base SQLite vit dans le volume `toilet-data` : il survit aux mises à jour (`git pull` puis `docker compose up -d --build`). Une seule instance doit tourner. Pour l’anonymat, NPM journalise par défaut les adresses IP : ajouter `access_log off;` dans l’onglet *Advanced* du Proxy Host si besoin.
 
