@@ -23,6 +23,9 @@ Un site React + TypeScript et une API Node.js / SQLite pour consulter et signale
 - [x] Remplacer les bips par des bruitages : chasse d'eau, prouts, mouches, compteur Geiger, ventouse, toc toc.
 - [x] PWA installable (manifeste, icônes, service worker) et notifications Web Push à chaque signalement, bon ou mauvais.
 
+- [x] Usage sur téléphone : feuille de signalement, cabines avant la carte, cibles tactiles de 44 px, bouton Retour, zones sûres, hauteur `dvh`, pause en arrière-plan.
+- [x] Notifications fiables : urgence haute, nouvelle tentative, délai d’envoi, réabonnement automatique, test d’envoi, auteur non notifié.
+
 ## Livraison et validation
 - [x] Installer les dépendances et vérifier le typage / build de production.
 - [x] Tester les durées, la persistance, les entrées API, la remise à zéro, les changements d'heure et les retours sonores : **14 tests réussis**.

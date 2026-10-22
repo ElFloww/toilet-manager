@@ -1,7 +1,7 @@
 import express, { type ErrorRequestHandler } from 'express';
 import { CLEANLINESS, DANGER_LEVELS, TOILETS, type Cleanliness } from '../shared/domain.js';
 import type { Store } from './store.js';
-import { parseSubscription, type PushMessage } from './push.js';
+import { parseSubscription, type PushMessage, type PushTarget } from './push.js';
 import { reportFeedback } from '../src/feedback.js';
 
 /** Message de notification pour un signalement enregistré. */
@@ -19,7 +19,18 @@ export function reportMessage(id: string, report: { kind: 'danger'; level: numbe
   };
 }
 
-export function createApp(store: Store, notify: (message: PushMessage) => void = () => {}) {
+/** Envoie une notification ; renvoie le bilan de l'envoi quand il est connu. */
+export type Notifier = (message: PushMessage, target?: PushTarget) => Promise<{ sent: number; failed: number }> | void;
+
+export const TEST_MESSAGE: PushMessage = {
+  title: '🔔 Alertes activées',
+  body: 'Tout fonctionne : vous recevrez une notification à chaque changement d’état d’une cabine.',
+  tag: 'test',
+  url: '/',
+};
+
+export function createApp(store: Store, notify: Notifier = () => {}, clock: () => number = Date.now) {
+  const lastTest = new Map<string, number>();
   const app = express();
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
@@ -43,21 +54,24 @@ export function createApp(store: Store, notify: (message: PushMessage) => void =
       res.status(400).json({ error: 'Le signalement doit être un objet JSON.' });
       return;
     }
-    if (Object.keys(body).some(key => key !== 'kind' && key !== 'level')) {
+    if (Object.keys(body).some(key => key !== 'kind' && key !== 'level' && key !== 'endpoint')) {
       res.status(400).json({ error: 'Seuls le type et le niveau du signalement sont acceptés.' });
       return;
     }
+    // Adresse push de l'appareil qui signale : sert uniquement à ne pas le notifier de son propre signalement.
+    // Elle n'est ni enregistrée ni liée au signalement.
+    const own = 'endpoint' in body && typeof body.endpoint === 'string' && body.endpoint.length <= 1024 ? body.endpoint : undefined;
     if ('kind' in body && 'level' in body) {
       if (body.kind === 'danger' && DANGER_LEVELS.some(level => level.id === body.level)) {
         const report = { kind: 'danger', level: Number(body.level) } as const;
         res.json(store.report(req.params.id, report));
-        notify(reportMessage(req.params.id, report));
+        void notify(reportMessage(req.params.id, report), { exclude: own });
         return;
       }
       if (body.kind === 'cleanliness' && CLEANLINESS.some(level => level.id === body.level)) {
         const report = { kind: 'cleanliness', level: String(body.level) } as const;
         res.json(store.report(req.params.id, report));
-        notify(reportMessage(req.params.id, report));
+        void notify(reportMessage(req.params.id, report), { exclude: own });
         return;
       }
     }
@@ -75,6 +89,30 @@ export function createApp(store: Store, notify: (message: PushMessage) => void =
       return;
     }
     res.status(201).json({ subscribed: true });
+  });
+  app.post('/api/push/test', async (req, res) => {
+    const endpoint: unknown = req.body?.endpoint;
+    if (typeof endpoint !== 'string' || endpoint.length > 1024) {
+      res.status(400).json({ error: 'Adresse d’abonnement invalide.' });
+      return;
+    }
+    if (!store.hasSubscription(endpoint)) {
+      res.status(404).json({ error: 'Cet appareil n’est pas (ou plus) abonné aux alertes.' });
+      return;
+    }
+    const now = clock();
+    if (now - (lastTest.get(endpoint) ?? 0) < 10_000) {
+      res.status(429).json({ error: 'Un test vient d’être envoyé : patientez quelques secondes.' });
+      return;
+    }
+    lastTest.set(endpoint, now);
+    if (lastTest.size > 500) lastTest.clear();
+    const result = await notify(TEST_MESSAGE, { only: endpoint });
+    if (result && result.failed > 0) {
+      res.status(502).json({ error: 'Le service de notifications du navigateur a refusé le message. Désactivez puis réactivez les alertes.' });
+      return;
+    }
+    res.json({ sent: true });
   });
   app.post('/api/push/unsubscribe', (req, res) => {
     const endpoint: unknown = req.body?.endpoint;

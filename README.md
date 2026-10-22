@@ -60,7 +60,8 @@ Les couleurs donnent priorité à la propreté critique puis dangereuse, puis à
 
 - `GET /api/state` : `{ serverTime, resetsAt, toilets }` (horodatages en millisecondes Unix).
 - `POST /api/toilets/:id/reports` : corps JSON `{ "kind": "danger", "level": 1 }` à `4`, ou `{ "kind": "cleanliness", "level": "clean" | "degraded" | "dangerous" | "critical" }`. Renvoie l'état complet.
-- `GET /api/push/key` : clé publique VAPID. `POST /api/push/subscriptions` : enregistre un abonnement push du navigateur (`201`, `400` si invalide, `503` si la limite de 2000 appareils est atteinte). `POST /api/push/unsubscribe` : `{ "endpoint" }`, renvoie `204`.
+- `GET /api/push/key` : clé publique VAPID. `POST /api/push/subscriptions` : enregistre un abonnement push du navigateur (`201`, `400` si invalide, `503` si la limite de 2000 appareils est atteinte). `POST /api/push/unsubscribe` : `{ "endpoint" }`, renvoie `204`. `POST /api/push/test` : `{ "endpoint" }`, envoie une notification de test à cet abonné (`404` s’il est inconnu, `429` si un test date de moins de 10 s, `502` si le service de push refuse).
+- Le corps d’un signalement accepte en plus un champ optionnel `endpoint` (adresse push de l’auteur) uniquement pour l’exclure de la diffusion.
 - Réponses d'erreur JSON et statuts `400`, `404`, `413` ou `500`.
 
 ## Interface, animations et bruitages
@@ -88,11 +89,30 @@ Les effets ne sont joués que pour la personne qui agit, jamais lors des actuali
 
 Le site est une PWA : manifeste, icônes, service worker (coquille de l’appli en cache, jamais l’API). Bouton **Installer** dans l’en-tête (Android/Chrome/Edge/desktop) ; sur iPhone : Partager → *Sur l’écran d’accueil*.
 
-Le bouton **Alertes** abonne l’appareil : chaque signalement, bon ou mauvais, déclenche une notification « 💨 N1 : Nuage suspect » sur tous les appareils abonnés (toucher la notification ouvre le plan sur la cabine). Le serveur implémente Web Push (RFC 8291 + VAPID) sans dépendance ; les clés VAPID sont créées au premier démarrage et conservées dans la base (volume `toilet-data` : ne pas le supprimer, sinon tout le monde doit se réabonner). Variable optionnelle `VAPID_SUBJECT` (`mailto:vous@exemple.fr`).
+### Sur téléphone
+
+- Les cabines (grosses cibles tactiles) sont en haut de l’écran, la carte dessous. Un toucher ouvre une **feuille de signalement** qui monte du bas, avec le bouton « Signaler » toujours visible ; elle se range après l’envoi, et le bouton *Retour* d’Android la ferme au lieu de quitter l’appli.
+- Le bandeau « Soyez prévenu sur votre téléphone » propose d’activer les alertes au premier lancement (« Plus tard » le masque).
+- L’appli ne sollicite plus le serveur quand elle est en arrière-plan et se met à jour dès qu’on y revient.
+
+### Notifications
+
+Le bouton **Alertes** abonne l’appareil : chaque signalement, bon ou mauvais, déclenche une notification « 💨 N1 : Nuage suspect » sur les **autres** appareils abonnés (l’auteur n’est pas notifié de son propre signalement ; son adresse push n’est ni enregistrée ni liée au signalement). Toucher la notification ouvre le plan sur la cabine. Le bouton **Tester** (après activation) ou « Tester les alertes » (pied de page) envoie une notification à cet appareil seul.
+
+Le serveur implémente Web Push (RFC 8291 + VAPID) sans dépendance ; les clés VAPID sont créées au premier démarrage et conservées dans la base (volume `toilet-data` : ne pas le supprimer). Variable à définir : `VAPID_SUBJECT` (`mailto:vous@votre-domaine.fr`, une vraie adresse : Apple peut refuser une adresse d’exemple ; un avertissement est affiché au démarrage).
+
+Pour que les alertes arrivent même téléphone en veille :
+
+- Envoi en urgence « haute » (réveille Android en économie d’énergie et iOS), validité 1 h, **une nouvelle tentative** en cas d’erreur réseau, 429 ou 5xx, délai maximal de 10 s par envoi.
+- **Auto-réparation** : à chaque ouverture ou retour au premier plan, l’appli ré-enregistre son abonnement sur le serveur. Si la base a été réinitialisée, si l’abonnement a été purgé ou si le navigateur l’a renouvelé, tout est rétabli sans action (sauf si l’utilisateur a coupé les alertes lui-même).
+- Les abonnements définitivement périmés (404/410) sont supprimés ; les échecs sont comptés par statut dans les journaux du conteneur (`docker logs toilet-manager`), sans jamais journaliser d’adresse d’abonnement.
+
+Conditions :
 
 - **HTTPS obligatoire** (service worker et push) : certificat Let’s Encrypt dans NPM ; `localhost` fonctionne pour tester.
-- **iOS 16.4+** : les notifications ne marchent qu’une fois l’appli ajoutée à l’écran d’accueil.
-- Les abonnements ne sont liés à aucun signalement ni identité ; ceux qui expirent sont supprimés automatiquement. Les serveurs de push (Google, Mozilla, Apple, Microsoft) voient les adresses d’abonnement, pas le contenu.
+- **iOS 16.4+** : les notifications ne marchent qu’une fois l’appli ajoutée à l’écran d’accueil, puis ouverte depuis cette icône.
+- **Android** : si rien n’arrive, vérifier Réglages → Applis → Chrome (ou l’appli installée) → Notifications, et l’économiseur de batterie.
+- Les abonnements ne sont liés à aucun signalement ni identité. Les serveurs de push (Google, Mozilla, Apple, Microsoft) voient les adresses d’abonnement, pas le contenu.
 - Dans NPM, ne pas mettre en cache `/sw.js`.
 
 ## Anonymat et hébergement

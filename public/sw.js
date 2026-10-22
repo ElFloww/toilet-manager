@@ -1,5 +1,5 @@
 /* Service worker de Toilet Manager : notifications push et fonctionnement hors ligne minimal. */
-const CACHE = 'toilet-manager-v1';
+const CACHE = 'toilet-manager-v2';
 const SHELL = ['/', '/manifest.webmanifest', '/favicon.svg', '/icons/icon-192.png', '/icons/badge-96.png'];
 
 self.addEventListener('install', event => {
@@ -34,14 +34,20 @@ self.addEventListener('fetch', event => {
 
 self.addEventListener('push', event => {
   let message = { title: 'Toilet Manager', body: 'Une cabine vient d’être mise à jour.', tag: 'toilet-manager', url: '/' };
-  try { message = { ...message, ...event.data.json() }; } catch { /* message par défaut */ }
-  event.waitUntil(self.registration.showNotification(message.title, {
-    body: message.body,
-    tag: message.tag,
+  try { message = { ...message, ...event.data.json() }; }
+  catch {
+    // Message non JSON : on affiche son texte tel quel plutôt que le texte par défaut.
+    try { const text = event.data.text(); if (text) message.body = text; } catch { /* message par défaut */ }
+  }
+  // Sur iOS et Chrome, une notification doit toujours être affichée en réponse à un push (sinon l'abonnement est révoqué).
+  event.waitUntil(self.registration.showNotification(String(message.title).slice(0, 120), {
+    body: String(message.body).slice(0, 300),
+    tag: String(message.tag),
     renotify: true,
     icon: '/icons/icon-192.png',
     badge: '/icons/badge-96.png',
     lang: 'fr',
+    timestamp: Date.now(),
     vibrate: [80, 40, 80, 40, 220],
     data: { url: message.url },
   }));
@@ -49,15 +55,20 @@ self.addEventListener('push', event => {
 
 self.addEventListener('notificationclick', event => {
   event.notification.close();
-  const target = new URL(event.notification.data?.url || '/', self.location.origin).href;
+  let target = new URL('/', self.location.origin).href;
+  try {
+    const requested = new URL(event.notification.data?.url || '/', self.location.origin);
+    if (requested.origin === self.location.origin) target = requested.href;
+  } catch { /* adresse invalide : accueil */ }
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const client of windows) {
-      if (new URL(client.url).origin === self.location.origin) {
+      if (new URL(client.url).origin !== self.location.origin) continue;
+      try {
         await client.focus();
         client.postMessage({ type: 'open', url: target });
         return;
-      }
+      } catch { /* fenêtre morte ou focus refusé : on en ouvre une nouvelle */ }
     }
     await self.clients.openWindow(target);
   })());

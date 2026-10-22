@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Bell, BellOff, BellRing, Check, CircleHelp, Download, Info, Minus, Plus, RefreshCw, ShieldCheck, SprayCan, Volume2, VolumeX, Wind, X } from 'lucide-react';
 import { activeDangerLevel, CLEANLINESS, DANGER_LEVELS, statusColor, type Cleanliness, type Snapshot, type Toilet } from '../shared/domain';
 import FloorPlan from './FloorPlan';
-import { currentPushState, disablePush, enablePush, isIos, isStandalone, type InstallPromptEvent, type PushState } from './push';
+import { currentPushState, disablePush, enablePush, isIos, isStandalone, ownEndpoint, sendTestPush, syncPush, type InstallPromptEvent, type PushState } from './push';
 import { CLEANLINESS_EMOJI, DANGER_EMOJI, playFeedback, reportFeedback, verdict, weatherIcon, type ReportFeedback, type SoundName } from './feedback';
 
 const clock = new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' });
@@ -24,6 +24,10 @@ async function request(path: string, init?: RequestInit): Promise<Snapshot> {
   }
   return response.json();
 }
+
+/** Disposition téléphone / tablette : le panneau de signalement devient une feuille qui monte du bas. */
+const isCompactLayout = () => window.matchMedia('(max-width: 1000px)').matches;
+const INVITE_KEY = 'tm-invite';
 
 type Feedback = ReportFeedback & { id: number; toiletId: string; name: string };
 
@@ -48,34 +52,73 @@ export default function App() {
   const [pushInfo, setPushInfo] = useState('');
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(() => isStandalone());
+  const [testing, setTesting] = useState(false);
+  const [inviteDismissed, setInviteDismissed] = useState(() => { try { return localStorage.getItem(INVITE_KEY) === '1'; } catch { return false; } });
+  const sheetPushed = useRef(false);
   const audio = useRef<AudioContext | null>(null);
   const soundOn = useRef(true);
   const offset = useRef(0);
   const busy = useRef(false);
   const resetRequested = useRef(0);
-  const panel = useRef<HTMLElement>(null);
   const helpDialog = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
-    void currentPushState().then(setPushState).catch(() => setPushState('unsupported'));
+    const syncAlerts = () => { void syncPush().then(setPushState).catch(() => currentPushState().then(setPushState).catch(() => setPushState('unsupported'))); };
+    syncAlerts();
     const openFromUrl = (href: string) => {
       const id = new URL(href, location.href).searchParams.get('wc');
-      if (id) setSelected(id);
+      if (id) { setSelected(id); setSuccess(''); pushSheetHistory(); }
     };
-    openFromUrl(location.href);
+    const launchUrl = location.href;
     if (location.search) history.replaceState(null, '', location.pathname);
+    openFromUrl(launchUrl);
     const onMessage = (event: MessageEvent) => { if (event.data?.type === 'open') openFromUrl(event.data.url); };
+    const onPopState = () => { if (sheetPushed.current) { sheetPushed.current = false; setSelected(null); } };
+    const onVisible = () => { if (document.visibilityState === 'visible') syncAlerts(); };
     const onInstallPrompt = (event: Event) => { event.preventDefault(); setInstallPrompt(event as InstallPromptEvent); };
     const onInstalled = () => { setInstalled(true); setInstallPrompt(null); };
     navigator.serviceWorker?.addEventListener('message', onMessage);
     window.addEventListener('beforeinstallprompt', onInstallPrompt);
     window.addEventListener('appinstalled', onInstalled);
+    window.addEventListener('popstate', onPopState);
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
+      window.removeEventListener('popstate', onPopState);
+      document.removeEventListener('visibilitychange', onVisible);
       navigator.serviceWorker?.removeEventListener('message', onMessage);
       window.removeEventListener('beforeinstallprompt', onInstallPrompt);
       window.removeEventListener('appinstalled', onInstalled);
     };
   }, []);
+
+  /** Sur téléphone, le bouton « retour » ferme la feuille de signalement au lieu de quitter l'appli. */
+  function pushSheetHistory() {
+    if (isCompactLayout() && !sheetPushed.current) {
+      history.pushState({ sheet: true }, '');
+      sheetPushed.current = true;
+    }
+  }
+
+  function closeSelection() {
+    setSelected(null);
+    if (sheetPushed.current) { sheetPushed.current = false; history.back(); }
+  }
+
+  function dismissInvite() {
+    setInviteDismissed(true);
+    try { localStorage.setItem(INVITE_KEY, '1'); } catch { /* navigation privée : sans importance */ }
+  }
+
+  async function testPush() {
+    setTesting(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    try {
+      await sendTestPush();
+      setPushInfo('Notification de test envoyée : elle doit arriver dans quelques secondes. Rien reçu ? Vérifiez le mode « Ne pas déranger » et les réglages de notifications du téléphone.');
+    } catch (cause) {
+      setPushInfo(cause instanceof Error ? `Test impossible : ${cause.message}` : 'Test impossible.');
+    } finally { setTesting(false); }
+  }
 
   async function togglePush() {
     setPushInfo('');
@@ -185,11 +228,22 @@ export default function App() {
 
   useEffect(() => {
     void refresh();
-    const polling = setInterval(() => { void refresh(); }, 10_000);
+    // Pas d'interrogation du serveur quand l'appli est en arrière-plan (batterie) ; mise à jour immédiate au retour.
+    const polling = setInterval(() => { if (document.visibilityState === 'visible') void refresh(); }, 10_000);
     const ticking = setInterval(() => setNow(Date.now() + offset.current), 1000);
-    const onFocus = () => { void refresh(); };
-    window.addEventListener('focus', onFocus);
-    return () => { clearInterval(polling); clearInterval(ticking); window.removeEventListener('focus', onFocus); };
+    const onResume = () => {
+      setNow(Date.now() + offset.current);
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    window.addEventListener('focus', onResume);
+    window.addEventListener('online', onResume);
+    document.addEventListener('visibilitychange', onResume);
+    return () => {
+      clearInterval(polling); clearInterval(ticking);
+      window.removeEventListener('focus', onResume);
+      window.removeEventListener('online', onResume);
+      document.removeEventListener('visibilitychange', onResume);
+    };
   }, []);
 
   useEffect(() => {
@@ -212,12 +266,13 @@ export default function App() {
   const fresh = toilets.filter(toilet => toilet.dangerLevel === 0 && toilet.cleanliness === 'clean').length;
   const dirty = toilets.filter(toilet => toilet.cleanliness !== 'clean').length;
   const atmospheric = toilets.filter(toilet => toilet.dangerLevel > 0).length;
+  const showInvite = !inviteDismissed && !pushInfo && (pushState === 'off' || pushState === 'needs-install');
   const untilReset = snapshot ? Math.max(0, snapshot.resetsAt - now) : 0;
 
   function select(id: string) {
     if (id !== selected) void play('knock');
     setSelected(id); setSuccess(''); setDanger(1); setCleanliness('degraded');
-    if (window.matchMedia('(max-width: 1050px)').matches) panel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    pushSheetHistory();
   }
 
   async function report() {
@@ -228,11 +283,14 @@ export default function App() {
     busy.current = true;
     setSaving(true); setError(''); setSuccess('');
     try {
+      const endpoint = await ownEndpoint(); // pour ne pas notifier l'auteur de son propre signalement
       apply(await request(`/api/toilets/${toilet.id}/reports`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind: mode, level: mode === 'danger' ? danger : cleanliness }),
+        body: JSON.stringify({ kind: mode, level: mode === 'danger' ? danger : cleanliness, ...(endpoint ? { endpoint } : {}) }),
       }));
+      navigator.vibrate?.(40);
+      if (isCompactLayout()) closeSelection(); // la feuille se range : on voit la carte et le « Flash spécial »
       setSuccess('Signalement enregistré. Merci pour les suivants !');
       setFeedback({ ...effect, id: Date.now(), toiletId: reportedToilet.id, name: reportedToilet.name });
       void play(effect.sound, audioReady);
@@ -288,10 +346,20 @@ export default function App() {
 
     <main>
       {error && <div className="notification error" role="alert"><Info size={18} /><span>{error} Les données peuvent être obsolètes.</span><button onClick={() => void refresh()}>Réessayer</button></div>}
+      {showInvite && <div className="notification invite" role="region" aria-label="Activer les alertes">
+        <BellRing size={20} />
+        <span><b>Soyez prévenu sur votre téléphone.</b> {pushState === 'needs-install' ? 'Installez d’abord l’app sur l’écran d’accueil, puis activez les alertes.' : 'Une notification à chaque changement d’état d’une cabine.'}</span>
+        <div className="invite-actions">
+          <button className="primary" onClick={() => void togglePush()}>{pushState === 'needs-install' ? 'Comment faire' : 'Activer'}</button>
+          <button onClick={dismissInvite}>Plus tard</button>
+        </div>
+      </div>}
       {pushInfo === 'ios' ? <div className="notification install-steps" role="status"><Download size={18} />
         <span><b>Sur iPhone, les alertes passent par l’app installée.</b> Dans Safari, touchez <b>Partager</b> puis <b>Sur l’écran d’accueil</b>. Ouvrez ensuite « Toilettes » depuis l’écran d’accueil et touchez <b>Alertes</b>.</span>
         <button onClick={() => setPushInfo('')}>Fermer</button></div>
-        : pushInfo && <div className="notification" role="status"><Bell size={18} /><span>{pushInfo}</span><button onClick={() => setPushInfo('')}>Fermer</button></div>}
+        : pushInfo && <div className="notification" role="status"><Bell size={18} /><span>{pushInfo}</span>
+          {pushState === 'on' && <button onClick={() => void testPush()} disabled={testing}>{testing ? 'Envoi…' : 'Tester'}</button>}
+          <button onClick={() => setPushInfo('')}>Fermer</button></div>}
       {soundError && <div className="notification" role="status"><VolumeX size={18} /><span>{soundError}</span><button onClick={() => setSoundError('')}>Fermer</button></div>}
 
       <div className="studio">
@@ -320,7 +388,8 @@ export default function App() {
           </div>
         </section>
 
-        <aside className={`forecast ${toilet ? 'has-selection' : ''}`} ref={panel} aria-label="Prévisions et signalement">
+        {toilet && <div className="sheet-backdrop" onClick={closeSelection} aria-hidden="true" />}
+        <aside className={`forecast ${toilet ? 'has-selection' : ''}`} aria-label="Prévisions et signalement">
           {!toilet ? <div className="empty-selection">
             <button className={`flush-toy ${flushing ? 'flushing' : ''}`} onClick={() => void flushDemo()} aria-label="Tirer la chasse (essai du son)">
               <span aria-hidden="true">🚽</span><span className="swirl" aria-hidden="true" />
@@ -337,7 +406,7 @@ export default function App() {
                   <h2>{toilet.name}</h2>
                   <p>Bloc {toilet.zone.toLowerCase()}, {toilet.room.toLowerCase()}{toilet.accessible ? ', accessible PMR' : ''}</p>
                 </div>
-                <button className="icon-button close" onClick={() => setSelected(null)} aria-label="Fermer la sélection"><X size={18} /></button>
+                <button className="icon-button close" onClick={closeSelection} aria-label="Fermer la sélection"><X size={18} /></button>
               </div>
               <div className="verdict-line">{verdict(toilet).text}</div>
 
@@ -412,6 +481,7 @@ export default function App() {
       <footer>
         <span>Tout repart à zéro à minuit, heure de Paris{snapshot && <>, dans {Math.floor(untilReset / 3_600_000)} h {String(Math.floor(untilReset / 60_000) % 60).padStart(2, '0')}</>}. Carte actualisée toutes les 10 s.</span>
         <span><ShieldCheck size={14} /> Anonyme : ni compte, ni cookie, ni historique.</span>
+        {pushState === 'on' && <button onClick={() => void testPush()} disabled={testing}>Tester les alertes</button>}
         <button onClick={() => setHelp(true)}>Comment ça marche</button>
       </footer>
     </main>

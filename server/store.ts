@@ -101,6 +101,10 @@ export class Store {
     return true;
   }
 
+  hasSubscription(endpoint: string): boolean {
+    return this.db.prepare('SELECT 1 FROM push_subscriptions WHERE endpoint = ?').get(endpoint) !== undefined;
+  }
+
   removeSubscription(endpoint: string) {
     this.db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
   }

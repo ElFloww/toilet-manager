@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { broadcast, encryptPayload, generateVapidKeys, parseSubscription, vapidAuthorization, type PushMessage, type PushSubscriptionData } from '../server/push.js';
 import { MAX_SUBSCRIPTIONS, Store } from '../server/store.js';
-import { createApp, reportMessage } from '../server/app.js';
+import { createApp, reportMessage, TEST_MESSAGE, type Notifier } from '../server/app.js';
 
 function browserSubscription(host = 'fcm.googleapis.com', id = 'abc'): PushSubscriptionData {
   const ecdh = createECDH('prime256v1');
@@ -89,13 +89,40 @@ test('L’envoi chiffre pour chaque abonné et supprime ceux qui ont expiré', (
     const result = await broadcast(store, store.vapidKeys(), 'mailto:a@b.fr', message, async (url, init) => {
       calls.push({ url, headers: init.headers, body: init.body });
       return { status: statuses[url.split('/').pop()!] };
-    });
+    }, {}, { retryDelayMs: 0 });
     assert.deepEqual(result, { sent: 3, failed: 1 });
   } finally { console.error = originalError; }
-  assert.equal(calls.length, 4);
-  assert.ok(calls.every(call => call.headers['Content-Encoding'] === 'aes128gcm' && call.headers.Authorization.startsWith('vapid t=') && call.headers.Topic === 'wc-N1'));
+  assert.equal(calls.length, 5); // l'envoi en erreur 500 est retenté une fois
+  assert.ok(calls.every(call => call.headers['Content-Encoding'] === 'aes128gcm' && call.headers.Authorization.startsWith('vapid t=') && call.headers.Topic === 'wc-N1' && call.headers.Urgency === 'high'));
   assert.ok(calls.every(call => call.body.length > 86));
   assert.deepEqual(store.subscriptions().map(sub => sub.endpoint.split('/').pop()).sort(), ['fail', 'ok']);
+}));
+
+test('Un envoi qui échoue une fois (réseau, 429, 5xx) est retenté et réussit', () => withStore(async store => {
+  const flaky = ['net', 'busy'].map(id => browserSubscription('fcm.googleapis.com', id));
+  flaky.forEach(sub => store.addSubscription(sub));
+  const attempts: Record<string, number> = {};
+  const result = await broadcast(store, store.vapidKeys(), 'mailto:a@b.fr', { title: 'T', body: 'B', tag: 'x', url: '/' }, async url => {
+    const id = url.split('/').pop()!;
+    attempts[id] = (attempts[id] ?? 0) + 1;
+    if (attempts[id] === 1) { if (id === 'net') throw new Error('ECONNRESET'); return { status: 429 }; }
+    return { status: 201 };
+  }, {}, { retryDelayMs: 0 });
+  assert.deepEqual(result, { sent: 2, failed: 0 });
+  assert.deepEqual(attempts, { net: 2, busy: 2 });
+}));
+
+test('L’envoi peut exclure l’auteur du signalement ou viser un seul appareil', () => withStore(async store => {
+  const subs = ['a', 'b', 'c'].map(id => browserSubscription('fcm.googleapis.com', id));
+  subs.forEach(sub => store.addSubscription(sub));
+  const message: PushMessage = { title: 'T', body: 'B', tag: 'x', url: '/' };
+  const reached: string[] = [];
+  const transport = async (url: string) => { reached.push(url.split('/').pop()!); return { status: 201 }; };
+  await broadcast(store, store.vapidKeys(), 'mailto:a@b.fr', message, transport, { exclude: subs[1].endpoint });
+  assert.deepEqual(reached.sort(), ['a', 'c']);
+  reached.length = 0;
+  await broadcast(store, store.vapidKeys(), 'mailto:a@b.fr', message, transport, { only: subs[2].endpoint });
+  assert.deepEqual(reached, ['c']);
 }));
 
 test('Le message de notification décrit le signalement', () => {
@@ -109,7 +136,7 @@ test('Le message de notification décrit le signalement', () => {
 
 test('L’API enregistre les abonnements et notifie à chaque signalement valide', () => withStore(async store => {
   const sent: PushMessage[] = [];
-  const server = createApp(store, message => sent.push(message)).listen(0, '127.0.0.1');
+  const server = createApp(store, message => { sent.push(message); }).listen(0, '127.0.0.1');
   try {
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const post = (path: string, body: unknown) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -131,5 +158,33 @@ test('L’API enregistre les abonnements et notifie à chaque signalement valide
     assert.equal((await post('/api/push/unsubscribe', { endpoint: sub.endpoint })).status, 204);
     assert.equal(store.subscriptions().length, 0);
     assert.equal((await post('/api/push/unsubscribe', {})).status, 400);
+  } finally { server.close(); }
+}));
+
+test('Le signalement n’envoie pas de notification à son auteur, et le test ne vise que l’appareil abonné', () => withStore(async store => {
+  const calls: { message: PushMessage; target?: { exclude?: string; only?: string } }[] = [];
+  let outcome = { sent: 1, failed: 0 };
+  const notify: Notifier = async (message, target) => { calls.push({ message, target }); return outcome; };
+  let now = 1_000_000;
+  const server = createApp(store, notify, () => now).listen(0, '127.0.0.1');
+  try {
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const post = (path: string, body: unknown) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const sub = browserSubscription();
+    await post('/api/push/subscriptions', sub);
+
+    assert.equal((await post('/api/toilets/N-H1/reports', { kind: 'danger', level: 1, endpoint: sub.endpoint })).status, 200);
+    assert.equal(calls[0].target?.exclude, sub.endpoint);
+    assert.equal((await post('/api/toilets/N-H1/reports', { kind: 'danger', level: 1, extra: 1 })).status, 400);
+    assert.equal(store.subscriptions().length, 1, 'l’adresse du signalant n’est pas enregistrée par le signalement');
+
+    assert.equal((await post('/api/push/test', { endpoint: 'https://fcm.googleapis.com/inconnu' })).status, 404);
+    assert.equal((await post('/api/push/test', {})).status, 400);
+    assert.equal((await post('/api/push/test', { endpoint: sub.endpoint })).status, 200);
+    assert.deepEqual(calls.at(-1), { message: TEST_MESSAGE, target: { only: sub.endpoint } });
+    assert.equal((await post('/api/push/test', { endpoint: sub.endpoint })).status, 429);
+    now += 11_000;
+    outcome = { sent: 0, failed: 1 };
+    assert.equal((await post('/api/push/test', { endpoint: sub.endpoint })).status, 502);
   } finally { server.close(); }
 }));

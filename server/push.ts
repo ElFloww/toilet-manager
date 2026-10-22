@@ -113,7 +113,20 @@ export interface PushMessage {
 }
 
 export interface PushTransport {
-  (url: string, init: { method: string; headers: Record<string, string>; body: Uint8Array }): Promise<{ status: number }>;
+  (url: string, init: { method: string; headers: Record<string, string>; body: Uint8Array; signal?: AbortSignal }): Promise<{ status: number }>;
+}
+
+/** Destinataires d'un envoi : tous les abonnés, sauf `exclude`, ou seulement `only`. */
+export interface PushTarget {
+  exclude?: string;
+  only?: string;
+}
+
+export interface BroadcastOptions {
+  /** Délai avant la deuxième tentative (erreur réseau, 429 ou 5xx). */
+  retryDelayMs?: number;
+  /** Durée maximale d'une requête vers un service de push. */
+  timeoutMs?: number;
 }
 
 export interface SubscriptionStore {
@@ -121,10 +134,19 @@ export interface SubscriptionStore {
   removeSubscription(endpoint: string): void;
 }
 
-/** Envoie un message à tous les abonnés ; supprime les abonnements expirés (404 / 410). */
-export async function broadcast(store: SubscriptionStore, keys: VapidKeys, subject: string, message: PushMessage, transport: PushTransport = fetch as unknown as PushTransport) {
+/** Envoie un message aux abonnés ; supprime les abonnements expirés (404 / 410). */
+export async function broadcast(
+  store: SubscriptionStore, keys: VapidKeys, subject: string, message: PushMessage,
+  transport: PushTransport = fetch as unknown as PushTransport,
+  target: PushTarget = {}, options: BroadcastOptions = {},
+) {
+  const { retryDelayMs = 1500, timeoutMs = 10_000 } = options;
   const payload = Buffer.from(JSON.stringify(message));
-  const results = await Promise.allSettled(store.subscriptions().map(async subscription => {
+  const topic = message.tag.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || 'toilet';
+  const recipients = store.subscriptions()
+    .filter(subscription => (target.only === undefined || subscription.endpoint === target.only) && subscription.endpoint !== target.exclude);
+
+  async function deliver(subscription: PushSubscriptionData): Promise<number> {
     const response = await transport(subscription.endpoint, {
       method: 'POST',
       headers: {
@@ -132,16 +154,38 @@ export async function broadcast(store: SubscriptionStore, keys: VapidKeys, subje
         'Content-Encoding': 'aes128gcm',
         'Content-Type': 'application/octet-stream',
         TTL: '3600',
-        Urgency: 'normal',
-        Topic: message.tag.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || 'toilet',
+        // « high » : réveille un téléphone en veille (Android Doze, iOS) au lieu d'attendre sa prochaine synchronisation.
+        Urgency: 'high',
+        Topic: topic,
       },
       body: encryptPayload(payload, subscription),
+      signal: AbortSignal.timeout(timeoutMs),
     });
-    if (response.status === 404 || response.status === 410) store.removeSubscription(subscription.endpoint);
-    else if (response.status >= 400) throw new Error(`Service de push : statut ${response.status}`);
+    return response.status;
+  }
+
+  const results = await Promise.allSettled(recipients.map(async subscription => {
+    let status: number;
+    try { status = await deliver(subscription); }
+    catch { status = 0; } // réseau coupé ou délai dépassé
+    if (status === 0 || status === 429 || status >= 500) {
+      await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+      try { status = await deliver(subscription); } catch { status = 0; }
+    }
+    if (status === 404 || status === 410) store.removeSubscription(subscription.endpoint);
+    else if (status < 200 || status >= 300) throw new Error(String(status));
   }));
-  const failures = results.filter(result => result.status === 'rejected').length;
-  // On ne journalise jamais les adresses d'abonnement, seulement un compte.
-  if (failures) console.error(`Notifications : ${failures} envoi(s) en échec sur ${results.length}.`);
-  return { sent: results.length - failures, failed: failures };
+
+  const failures = results.filter(result => result.status === 'rejected');
+  if (failures.length) {
+    // Jamais d'adresse d'abonnement dans les journaux : seulement un compte par statut (0 = réseau).
+    const byStatus = new Map<string, number>();
+    for (const failure of failures) {
+      const key = (failure as PromiseRejectedResult).reason?.message ?? '?';
+      byStatus.set(key, (byStatus.get(key) ?? 0) + 1);
+    }
+    const detail = [...byStatus].map(([status, count]) => `${count}×${status === '0' ? 'réseau' : status}`).join(', ');
+    console.error(`Notifications : ${failures.length} envoi(s) en échec sur ${results.length} (${detail}).`);
+  }
+  return { sent: results.length - failures.length, failed: failures.length };
 }

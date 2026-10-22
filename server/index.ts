@@ -10,10 +10,15 @@ mkdirSync(dataDir, { recursive: true });
 const store = new Store(resolve(dataDir, 'toilets.sqlite'));
 const vapidSubject = process.env.VAPID_SUBJECT ?? 'mailto:toilet-manager@example.com';
 const vapidKeys = store.vapidKeys();
-const app = createApp(store, message => {
-  broadcast(store, vapidKeys, vapidSubject, message)
-    .catch(error => console.error('Notifications impossibles :', error instanceof Error ? error.message : error));
-});
+if (/@example\.(com|org|net)$/.test(vapidSubject) || vapidSubject === 'mailto:toilet-manager@example.com') {
+  console.warn('VAPID_SUBJECT utilise une adresse d’exemple : définissez une vraie adresse (mailto:vous@domaine.fr) ; certains services de push (Apple) peuvent refuser les envois.');
+}
+const app = createApp(store, (message, target) =>
+  broadcast(store, vapidKeys, vapidSubject, message, undefined, target)
+    .catch(error => {
+      console.error('Notifications impossibles :', error instanceof Error ? error.message : error);
+      return { sent: 0, failed: 1 };
+    }));
 const dist = resolve('dist');
 if (existsSync(dist)) {
   app.use(express.static(dist, {
