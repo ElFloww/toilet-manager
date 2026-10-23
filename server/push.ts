@@ -142,7 +142,6 @@ export async function broadcast(
 ) {
   const { retryDelayMs = 1500, timeoutMs = 10_000 } = options;
   const payload = Buffer.from(JSON.stringify(message));
-  const topic = message.tag.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || 'toilet';
   const recipients = store.subscriptions()
     .filter(subscription => (target.only === undefined || subscription.endpoint === target.only) && subscription.endpoint !== target.exclude);
 
@@ -156,7 +155,6 @@ export async function broadcast(
         TTL: '3600',
         // « high » : réveille un téléphone en veille (Android Doze, iOS) au lieu d'attendre sa prochaine synchronisation.
         Urgency: 'high',
-        Topic: topic,
       },
       body: encryptPayload(payload, subscription),
       signal: AbortSignal.timeout(timeoutMs),

@@ -93,7 +93,7 @@ test('L’envoi chiffre pour chaque abonné et supprime ceux qui ont expiré', (
     assert.deepEqual(result, { sent: 3, failed: 1 });
   } finally { console.error = originalError; }
   assert.equal(calls.length, 5); // l'envoi en erreur 500 est retenté une fois
-  assert.ok(calls.every(call => call.headers['Content-Encoding'] === 'aes128gcm' && call.headers.Authorization.startsWith('vapid t=') && call.headers.Topic === 'wc-N1' && call.headers.Urgency === 'high'));
+  assert.ok(calls.every(call => call.headers['Content-Encoding'] === 'aes128gcm' && call.headers.Authorization.startsWith('vapid t=') && call.headers.Urgency === 'high'));
   assert.ok(calls.every(call => call.body.length > 86));
   assert.deepEqual(store.subscriptions().map(sub => sub.endpoint.split('/').pop()).sort(), ['fail', 'ok']);
 }));

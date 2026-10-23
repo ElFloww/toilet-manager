@@ -362,6 +362,21 @@ export default function App() {
           <button onClick={() => setPushInfo('')}>Fermer</button></div>}
       {soundError && <div className="notification" role="status"><VolumeX size={18} /><span>{soundError}</span><button onClick={() => setSoundError('')}>Fermer</button></div>}
 
+      <section className="outlook" aria-label="Prévisions cabine par cabine">
+        {groups.map(group => <div className="outlook-group" key={group.name}>
+          <h2>{group.name}</h2>
+          <div className="outlook-cells">
+            {group.items.map(item => <button key={item.id} className={`outlook-cell ${selected === item.id ? 'selected' : ''}`} style={{ '--c': statusColor(item) } as CSSProperties}
+              onClick={() => select(item.id)} aria-pressed={selected === item.id} aria-label={`${item.name} : ${verdict(item).text}`}>
+              <span className="cell-label">{item.label}</span>
+              <span className="cell-icon" aria-hidden="true">{weatherIcon(item)}</span>
+              <span className="cell-temp">{item.dangerUntil ? `${minutesLeft(item.dangerUntil, now)}′` : ({ clean: 'Beau', degraded: 'Dégradé', dangerous: 'Danger', critical: 'Critique' } as const)[item.cleanliness]}</span>
+            </button>)}
+            {!snapshot && Array.from({ length: 5 }, (_, i) => <span key={i} className="outlook-cell placeholder" />)}
+          </div>
+        </div>)}
+      </section>
+
       <div className="studio">
         <section className="weather-map" aria-labelledby="map-title">
           <div className="map-toolbar">
@@ -454,20 +469,6 @@ export default function App() {
         </aside>
       </div>
 
-      <section className="outlook" aria-label="Prévisions cabine par cabine">
-        {groups.map(group => <div className="outlook-group" key={group.name}>
-          <h2>{group.name}</h2>
-          <div className="outlook-cells">
-            {group.items.map(item => <button key={item.id} className={`outlook-cell ${selected === item.id ? 'selected' : ''}`} style={{ '--c': statusColor(item) } as CSSProperties}
-              onClick={() => select(item.id)} aria-pressed={selected === item.id} aria-label={`${item.name} : ${verdict(item).text}`}>
-              <span className="cell-label">{item.label}</span>
-              <span className="cell-icon" aria-hidden="true">{weatherIcon(item)}</span>
-              <span className="cell-temp">{item.dangerUntil ? `${minutesLeft(item.dangerUntil, now)}′` : ({ clean: 'Beau', degraded: 'Dégradé', dangerous: 'Danger', critical: 'Critique' } as const)[item.cleanliness]}</span>
-            </button>)}
-            {!snapshot && Array.from({ length: 5 }, (_, i) => <span key={i} className="outlook-cell placeholder" />)}
-          </div>
-        </div>)}
-      </section>
 
       <ul className="legend" aria-label="Légende">
         <li><i style={{ background: '#2e9d80' }} /> ☀️ Beau temps</li>

@@ -31,6 +31,12 @@ export const TEST_MESSAGE: PushMessage = {
 
 export function createApp(store: Store, notify: Notifier = () => {}, clock: () => number = Date.now) {
   const lastTest = new Map<string, number>();
+  /** Notifie les autres appareils d'un signalement et journalise le bilan (nombre d'envois, jamais d'adresse). */
+  const announce = (message: PushMessage, exclude: string | undefined) => {
+    void Promise.resolve(notify(message, { exclude })).then(result => {
+      if (result) console.log(`Signalement ${message.tag} : ${result.sent} notification(s) envoyée(s), ${result.failed} échec(s).`);
+    });
+  };
   const app = express();
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
@@ -65,13 +71,13 @@ export function createApp(store: Store, notify: Notifier = () => {}, clock: () =
       if (body.kind === 'danger' && DANGER_LEVELS.some(level => level.id === body.level)) {
         const report = { kind: 'danger', level: Number(body.level) } as const;
         res.json(store.report(req.params.id, report));
-        void notify(reportMessage(req.params.id, report), { exclude: own });
+        announce(reportMessage(req.params.id, report), own);
         return;
       }
       if (body.kind === 'cleanliness' && CLEANLINESS.some(level => level.id === body.level)) {
         const report = { kind: 'cleanliness', level: String(body.level) } as const;
         res.json(store.report(req.params.id, report));
-        void notify(reportMessage(req.params.id, report), { exclude: own });
+        announce(reportMessage(req.params.id, report), own);
         return;
       }
     }
