@@ -275,6 +275,30 @@ export default function App() {
     pushSheetHistory();
   }
 
+  async function allGood() {
+    if (!toilet || busy.current) return;
+    const audioReady = prepareAudio();
+    const reportedToilet = toilet;
+    busy.current = true;
+    setSaving(true); setError(''); setSuccess('');
+    try {
+      const endpoint = await ownEndpoint();
+      apply(await request(`/api/toilets/${toilet.id}/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(endpoint ? { endpoint } : {}),
+      }));
+      navigator.vibrate?.(40);
+      if (isCompactLayout()) closeSelection();
+      setSuccess('Cabine remise à zéro : propre et air frais.');
+      const effect = reportFeedback('cleanliness', 'clean');
+      setFeedback({ ...effect, id: Date.now(), toiletId: reportedToilet.id, name: reportedToilet.name, title: 'Finalement, tout va bien !', shout: 'Fausse alerte !', message: 'Cabine remise à zéro : propre et sans odeur.' });
+      void play('flush', audioReady);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'La remise à zéro n’a pas pu être enregistrée.');
+    } finally { busy.current = false; setSaving(false); }
+  }
+
   async function report() {
     if (!toilet || busy.current) return;
     const audioReady = prepareAudio();
@@ -463,6 +487,8 @@ export default function App() {
               <button className="submit-report" onClick={() => void report()} disabled={saving || refreshing}>
                 {saving ? 'Enregistrement…' : <><span aria-hidden="true">{chosenEmoji}</span> Signaler «{' '}{chosenName}{' '}»</>}
               </button>
+              {(toilet.dangerLevel > 0 || toilet.cleanliness !== 'clean') &&
+                <button className="all-good" onClick={() => void allGood()} disabled={saving || refreshing}><span aria-hidden="true">✅</span> Finalement tout va bien !</button>}
               <span className="anonymous-note"><ShieldCheck size={13} /> Pas de nom, pas de compte, pas de jugement.</span>
               {success && <div className="success-message" role="status"><Check size={16} />{success}</div>}
             </div>}
@@ -519,7 +545,7 @@ export default function App() {
         <h2 id="help-title">Le petit guide du petit coin</h2>
         <ol>
           <li>Touchez un picto sur la carte ou dans les prévisions (ou Tab puis Entrée). Sur mobile, zoomez puis faites glisser la carte.</li>
-          <li>Signalez l’atmosphère : 15, 30, 60 ou 90 minutes. Le chiffre affiché sur la carte, c’est le nombre de minutes restantes. Un nouveau signalement ne réduit jamais une alerte en cours, et l’alerte s’atténue avec le temps.</li>
+          <li>Signalez l’atmosphère : 15, 30, 60 ou 90 minutes. Le chiffre affiché sur la carte, c’est le nombre de minutes restantes. Un nouveau signalement remplace l’alerte en cours (on peut l’aggraver ou l’atténuer), et l’alerte s’atténue avec le temps. Fausse alerte ? « Finalement tout va bien ! » remet la cabine à zéro.</li>
           <li>Signalez la propreté, indépendamment. Le dernier signalement remplace le précédent ; «{' '}Propre{' '}» indique un nettoyage.</li>
         </ol>
         <p>Chaque état a son bruitage : chasse d’eau, prouts plus ou moins inquiétants, mouches, compteur Geiger, ventouse… Le bouton «{' '}Bruitages{' '}» les coupe.</p>

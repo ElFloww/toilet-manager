@@ -71,12 +71,20 @@ export class Store {
       const level = DANGER_LEVELS.find(level => level.id === report.level);
       if (!level) throw new Error('Niveau de danger invalide.');
       const until = Math.min(now + level.minutes * 60_000, nextParisMidnight(now));
-      this.db.prepare(`UPDATE toilets SET danger_level = MAX(danger_level, ?),
-        danger_until = MAX(COALESCE(danger_until, 0), ?) WHERE id = ?`).run(level.id, until, id);
+      // Le dernier signalement remplace le précédent : on peut aussi bien aggraver qu'atténuer l'alerte.
+      this.db.prepare('UPDATE toilets SET danger_level = ?, danger_until = ? WHERE id = ?').run(level.id, until, id);
     } else {
       if (!CLEANLINESS.some(level => level.id === report.level)) throw new Error('État de propreté invalide.');
       this.db.prepare('UPDATE toilets SET cleanliness = ? WHERE id = ?').run(report.level, id);
     }
+    return this.snapshot();
+  }
+
+  /** « Finalement tout va bien » : atmosphère et propreté repartent à zéro pour cette cabine. */
+  reset(id: string): Snapshot {
+    if (!TOILETS.some(toilet => toilet.id === id)) throw new Error('Toilettes introuvables.');
+    this.refresh(this.clock());
+    this.db.prepare("UPDATE toilets SET danger_level = 0, danger_until = NULL, cleanliness = 'clean' WHERE id = ?").run(id);
     return this.snapshot();
   }
 

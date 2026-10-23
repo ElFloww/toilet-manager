@@ -68,20 +68,23 @@ for (const level of DANGER_LEVELS) {
   });
 }
 
-test('Propreté indépendante, priorité visuelle, alertes non réductibles et nettoyage', () => {
+test('Propreté indépendante, priorité visuelle, alertes remplaçables et nettoyage', () => {
   let now = Date.parse('2026-10-22T10:00:00Z');
   const store = new Store(':memory:', () => now);
   try {
     assert.equal(store.snapshot().toilets.length, 10);
     const radio = store.report('N-H1', { kind: 'danger', level: 4 }).toilets[0];
     now += 60_000;
+    assert.equal(radio.dangerLevel, 4);
     const lower = store.report('N-H1', { kind: 'danger', level: 1 }).toilets[0];
-    assert.equal(lower.dangerLevel, 4);
-    assert.equal(lower.dangerUntil, radio.dangerUntil);
+    assert.equal(lower.dangerLevel, 1);
+    assert.equal(lower.dangerUntil, now + 15 * 60_000);
+    const back = store.report('N-H1', { kind: 'danger', level: 4 }).toilets[0];
+    assert.equal(back.dangerLevel, 4);
     const dirty = store.report('N-H1', { kind: 'cleanliness', level: 'critical' }).toilets[0];
     assert.equal(statusColor(dirty), '#bf4456');
     assert.equal(dirty.dangerLevel, 4);
-    now = radio.dangerUntil!;
+    now = back.dangerUntil!;
     assert.equal(store.snapshot().toilets[0].cleanliness, 'critical');
     assert.equal(store.snapshot().toilets[0].dangerLevel, 0);
     const clean = store.report('N-H1', { kind: 'cleanliness', level: 'clean' }).toilets[0];
@@ -163,4 +166,29 @@ test('API : états, validation stricte, erreurs JSON et partage entre clients', 
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     store.close();
   }
+});
+
+test('30 minutes puis 15 minutes : le dernier signalement remplace le précédent', () => {
+  const now = Date.parse('2026-10-22T10:00:00Z');
+  const store = new Store(':memory:', () => now);
+  try {
+    store.report('N-H1', { kind: 'danger', level: 2 });
+    const state = store.report('N-H1', { kind: 'danger', level: 1 }).toilets[0];
+    assert.equal(state.dangerLevel, 1);
+    assert.equal(state.dangerUntil, now + 15 * 60_000);
+  } finally { store.close(); }
+});
+
+test('« Finalement tout va bien » remet une cabine à zéro sans toucher aux autres', () => {
+  const now = Date.parse('2026-10-22T10:00:00Z');
+  const store = new Store(':memory:', () => now);
+  try {
+    store.report('N-H1', { kind: 'danger', level: 4 });
+    store.report('N-H1', { kind: 'cleanliness', level: 'critical' });
+    store.report('N-F1', { kind: 'danger', level: 2 });
+    const state = store.reset('N-H1');
+    assert.deepEqual([state.toilets[0].dangerLevel, state.toilets[0].dangerUntil, state.toilets[0].cleanliness], [0, null, 'clean']);
+    assert.equal(state.toilets[1].dangerLevel, 2);
+    assert.throws(() => store.reset('BAD'));
+  } finally { store.close(); }
 });

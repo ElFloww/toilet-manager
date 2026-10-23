@@ -48,7 +48,7 @@ Cliquer sur une cuvette pour consulter et signaler son état. Les boutons + / �
 | Zone toxique | 60 minutes |
 | Radioactif | 90 minutes |
 
-Une nouvelle alerte conserve le maximum du niveau et de l'échéance actifs : elle ne peut pas réduire une alerte existante. La durée ne s'additionne pas à celle déjà en cours. Les alertes s'atténuent automatiquement au fil du compte à rebours : une alerte radioactive devient toxique à 60 minutes restantes, suspecte à 30 minutes, puis une petite brise à 15 minutes. Les niveaux initiaux toxique (60 min) et suspect (30 min) suivent les mêmes seuils de dégradation.
+Un nouveau signalement atmosphérique **remplace** l'alerte en cours (niveau et échéance), qu'il l'aggrave ou l'atténue : 30 minutes puis 15 minutes donne 15 minutes. La durée ne s'additionne pas. Le bouton **« Finalement tout va bien ! »** remet une cabine à zéro (air frais, propre). Les alertes s'atténuent automatiquement au fil du compte à rebours : une alerte radioactive devient toxique à 60 minutes restantes, suspecte à 30 minutes, puis une petite brise à 15 minutes. Les niveaux initiaux toxique (60 min) et suspect (30 min) suivent les mêmes seuils de dégradation.
 
 La propreté est indépendante : **propre, dégradé, dangereux, critique**. Le dernier signalement de propreté remplace le précédent. Signaler « Propre » permet d'indiquer un nettoyage ; cela ne supprime pas une alerte atmosphérique. Sans nouveau signalement, la propreté persiste jusqu'à minuit.
 
@@ -60,6 +60,7 @@ Les couleurs donnent priorité à la propreté critique puis dangereuse, puis à
 
 - `GET /api/state` : `{ serverTime, resetsAt, toilets }` (horodatages en millisecondes Unix).
 - `POST /api/toilets/:id/reports` : corps JSON `{ "kind": "danger", "level": 1 }` à `4`, ou `{ "kind": "cleanliness", "level": "clean" | "degraded" | "dangerous" | "critical" }`. Renvoie l'état complet.
+- `POST /api/toilets/:id/reset` : remet la cabine à zéro (corps optionnel `{ "endpoint" }` pour ne pas notifier l'auteur). Renvoie l'état complet.
 - `GET /api/push/key` : clé publique VAPID. `POST /api/push/subscriptions` : enregistre un abonnement push du navigateur (`201`, `400` si invalide, `503` si la limite de 2000 appareils est atteinte). `POST /api/push/unsubscribe` : `{ "endpoint" }`, renvoie `204`. `POST /api/push/test` : `{ "endpoint" }`, envoie une notification de test à cet abonné (`404` s’il est inconnu, `429` si un test date de moins de 10 s, `502` si le service de push refuse).
 - Le corps d’un signalement accepte en plus un champ optionnel `endpoint` (adresse push de l’auteur) uniquement pour l’exclure de la diffusion.
 - Réponses d'erreur JSON et statuts `400`, `404`, `413` ou `500`.

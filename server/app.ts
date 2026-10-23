@@ -22,6 +22,17 @@ export function reportMessage(id: string, report: { kind: 'danger'; level: numbe
 /** Envoie une notification ; renvoie le bilan de l'envoi quand il est connu. */
 export type Notifier = (message: PushMessage, target?: PushTarget) => Promise<{ sent: number; failed: number }> | void;
 
+/** Message de notification quand une cabine est remise à zéro. */
+export function resetMessage(id: string): PushMessage {
+  const toilet = TOILETS.find(toilet => toilet.id === id)!;
+  return {
+    title: `✅ ${toilet.label} : finalement tout va bien`,
+    body: `Fausse alerte : ${toilet.name} (${toilet.room.toLowerCase()}) est propre et l’air est frais.`,
+    tag: `wc-${toilet.label}`,
+    url: `/?wc=${encodeURIComponent(toilet.id)}`,
+  };
+}
+
 export const TEST_MESSAGE: PushMessage = {
   title: '🔔 Alertes activées',
   body: 'Tout fonctionne : vous recevrez une notification à chaque changement d’état d’une cabine.',
@@ -82,6 +93,16 @@ export function createApp(store: Store, notify: Notifier = () => {}, clock: () =
       }
     }
     res.status(400).json({ error: 'Type ou niveau de signalement invalide.' });
+  });
+  app.post('/api/toilets/:id/reset', (req, res) => {
+    if (!TOILETS.some(toilet => toilet.id === req.params.id)) {
+      res.status(404).json({ error: 'Ces toilettes n’existent pas.' });
+      return;
+    }
+    const endpoint: unknown = req.body?.endpoint;
+    const own = typeof endpoint === 'string' && endpoint.length <= 1024 ? endpoint : undefined;
+    res.json(store.reset(req.params.id));
+    announce(resetMessage(req.params.id), own);
   });
   app.get('/api/push/key', (_req, res) => res.json({ publicKey: store.vapidKeys().publicKey }));
   app.post('/api/push/subscriptions', (req, res) => {

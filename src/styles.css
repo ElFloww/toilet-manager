@@ -460,3 +460,7 @@ button, .wc, .outlook-cell, .level-option { touch-action: manipulation; }
   .outlook-cell:hover { transform: none; }
   .level-option:hover { transform: none; }
 }
+
+.all-good { display: flex; align-items: center; justify-content: center; gap: 8px; width: calc(100% - 40px); min-height: 44px; margin: 10px 20px 0; border: 1.5px solid var(--free); border-radius: 12px; background: #e3f4ec; color: #1f6d58; font-weight: 700; font-size: 15px; }
+.all-good:hover:not(:disabled) { background: #d3eee2; }
+@media (max-width: 620px) { .all-good { width: calc(100% - 32px); margin-left: 16px; margin-right: 16px; } }
